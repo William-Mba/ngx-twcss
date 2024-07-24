@@ -8,7 +8,7 @@ trigger:
   paths:
     include:
       - projects/ngx-twcss/src/*
-      - azure-pipelines/*packages.yml
+      - azure-pipelines.yaml
 
 pool:
   name: Continuous Integration
@@ -40,16 +40,16 @@ stages:
           - bash: |
               yarn build:package
               echo $(Build.SourceVersion) > dist/ngx-twcss/source_version.txt
-            displayName: "Build"
+            displayName: "Build package v$(Release)"
 
           - bash: |
               Xvfb -ac :0 -screen 0 1280x1024x16 -nolisten unix & export DISPLAY=:0
               yarn test:package:ci
-            displayName: "Test"
+            displayName: "Test package v$(Release)"
 
           - publish: $(Build.SourcesDirectory)/dist/ngx-twcss
-            artifact: drop
-            displayName: "Publish build artifact"
+            artifact: package
+            displayName: "Publish package v$(Release)"
 
           - task: PublishTestResults@2
             displayName: "Publish test results"
@@ -66,6 +66,16 @@ stages:
               summaryFileLocation: "$(Build.SourcesDirectory)/coverage/ngx-twcss/cobertura.xml"
               pathToSources: "$(Build.SourcesDirectory)/coverage/ngx-twcss"
 
+          - ${{ if eq(variables['Build.SourceBranchName'], 'main') }}:
+            - bash: |
+                yarn add ngx-twcss@file:dist/ngx-twcss
+                yarn build:demo
+              displayName: "Build demo v$(Release)"
+
+            - publish: $(Build.SourcesDirectory)/dist/ngx-twcss-demo
+              artifact: demo
+              displayName: "Publish demo v$(Release)"
+
   - ${{ if or(in(variables['Build.SourceBranchName'], 'main', 'next'), or(contains(variables['Build.SourceBranch'], 'feat/'), contains(variables['Build.SourceBranch'], 'fix/'))) }}:
     - stage: CD
       dependsOn: CI
@@ -74,17 +84,31 @@ stages:
           steps:
             - checkout: none
             - download: current
-              artifact: drop
-              displayName: Download build artifact
+              artifact: package
+              displayName: Download package v$(Release)
 
             - ${{ if eq(variables['Build.SourceBranchName'], 'main') }}:
+                - download: current
+                  artifact: demo
+                  displayName: Download demo v$(Release)
+
                 - bash: |
                     sed 's/0.0.0-placeholder/$(Release)/g' -i package.json
                     npm config set //registry.npmjs.org/:_authToken=$(authToken)
                     npm publish
                     npm publish --tag $(cat source_version.txt | cut -c1-7)
-                  displayName: "Release v$(Release)-latest"
-                  workingDirectory: $(Pipeline.Workspace)/drop
+                  displayName: "Release package v$(Release)"
+                  workingDirectory: $(Pipeline.Workspace)/package
+
+                - script: |
+                    # Remove the previous latest release
+                    rm -rf /azp/www/ngx-twcss/blue/*
+                    # Copy the current latest release to the blue directory
+                    cp -rp /azp/www/ngx-twcss/green/* /azp/www/ngx-twcss/blue
+                    # Copy the new release to the green directory
+                    cp -rfp . /azp/www/ngx-twcss/green
+                  displayName: "Release demo v$(Release)"
+                  workingDirectory: $(Pipeline.Workspace)/demo
 
             - ${{ elseif eq(variables['Build.SourceBranchName'], 'next') }}:
                 - bash: |
@@ -92,8 +116,8 @@ stages:
                     sed "s/0.0.0-placeholder/$release_version/g" -i package.json
                     npm config set //registry.npmjs.org/:_authToken=$(authToken)
                     npm publish --tag next
-                  displayName: "Release v$(Release)-next"
-                  workingDirectory: $(Pipeline.Workspace)/drop
+                  displayName: "Release package v$(Release)-next"
+                  workingDirectory: $(Pipeline.Workspace)/package
 
             - ${{ else }}:
                 - bash: |
@@ -101,5 +125,5 @@ stages:
                     sed "s/0.0.0-placeholder/$release_version/g" -i package.json
                     npm config set //registry.npmjs.org/:_authToken=$(authToken)
                     npm publish --tag insiders
-                  displayName: "Release v$(Release)-insiders"
-                  workingDirectory: $(Pipeline.Workspace)/drop
+                  displayName: "Release package v$(Release)-insiders"
+                  workingDirectory: $(Pipeline.Workspace)/package
